@@ -1,6 +1,3 @@
-# Purpose: Provides a conventional commit subject and required review details.
-# Scope: Used as a repository-local Git commit template.
-
 <type>(<scope>)!: <subject>
 
 # Types: feat, fix, docs, style, refactor, test, build, chore, perf, ci, deps,

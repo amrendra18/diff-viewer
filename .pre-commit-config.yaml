@@ -1,6 +1,3 @@
-# Purpose: Runs the installed first-commit policy at each Git hook stage.
-# Scope: Covers staged bytes, commit messages, and pre-push checks.
-
 minimum_pre_commit_version: "3.2.0"
 default_install_hook_types: [pre-commit, commit-msg, pre-push]
 repos:

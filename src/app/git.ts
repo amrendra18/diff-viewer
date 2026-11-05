@@ -62,7 +62,6 @@ function cleanEnvironment(extra: Readonly<Record<string, string>>): NodeJS.Proce
   return { ...env, ...Object.fromEntries(GIT_ENVIRONMENT), ...extra };
 }
 
-/** `input` goes to git's standard input; `env` adds variables for this one call. */
 function git(folder: string, command: GitCommand, args: readonly string[], { input, env = {} }: { input?: string; env?: Readonly<Record<string, string>> } = {}): Promise<string> {
   const fixed = [...GIT_SETTINGS.flatMap(setting => ['-c', setting]), ...GIT_OPTIONS, '-C', folder, command];
   return new Promise((done, fail) => {
@@ -80,7 +79,6 @@ function git(folder: string, command: GitCommand, args: readonly string[], { inp
   });
 }
 
-/** A repository whose folder, or whose .git, disappeared since it was opened. */
 const gone = (repo: Repository) => !existsSync(repo.path) || (!repo.bare && !existsSync(join(repo.path, '.git')));
 
 async function attempt<T>(work: () => Promise<T>, repo?: Repository): Promise<Result<T>> {
@@ -199,8 +197,6 @@ export function resolveRevision(repo: Repository, revision: string): Promise<Res
     throw new GitError({ kind: 'unknownCommit', text: revision });
   }, repo);
 }
-
-/* ---------- listings ---------- */
 
 const STATUS: Record<string, ChangeStatus> = { A: 'added', M: 'modified', D: 'deleted', R: 'renamed', T: 'modified', U: 'unmerged' };
 
@@ -322,7 +318,6 @@ async function stagedListing(repo: Repository, only: Only): Promise<Listing> {
   return { changes, patch: change => git(repo.path, 'diff-index', [...PATCH, ...compare, base, '--', ...pathsOf(change.file)]) };
 }
 
-/** The index against the working folder, one change per path. */
 async function trackedUnstaged(repo: Repository, only: Only): Promise<Change[]> {
   const changes = parseChanges(await git(repo.path, 'diff-files', ['--raw', '--numstat', '-z', ...limitTo(only)]));
   const conflicted = new Set(changes.filter(change => change.file.status === 'unmerged').map(change => change.file.path));
@@ -355,7 +350,6 @@ async function markedBinary(repo: Repository, paths: readonly string[]): Promise
  */
 export const UNTRACKED_READS = 16;
 
-/** Fills `buffer` from the start of the file, or less when the file is shorter. */
 async function readStart(handle: FileHandle, buffer: Buffer): Promise<Buffer> {
   let filled = 0;
   while (filled < buffer.length) {
@@ -484,8 +478,6 @@ export function changedFiles(repo: Repository, source: Source): Promise<Result<r
   return attempt(async () => (await listing(repo, source)).changes.map(change => change.file), repo);
 }
 
-/* ---------- file versions ---------- */
-
 /** A working file's text. A file the app may not open, such as one with mode 000, fails with unreadableFile for that file alone. */
 async function readDisk(repo: Repository, file: ChangedFile): Promise<string> {
   let handle: FileHandle;
@@ -536,14 +528,8 @@ function isModeOnly({ file, old, new: current }: Change): boolean {
   return file.status === 'modified' && old.kind !== 'none' && current.kind !== 'none' && old.mode !== current.mode && file.added === 0 && file.removed === 0;
 }
 
-/**
- * Staged and unstaged text diffs read last, newest last, so opening an unchanged file again (as every focus refresh on
- * those tabs does) reads and highlights nothing. Highlighting a 5,000-line file took 591 ms. Four entries bound the memory
- * to a few large diffs. A focus refresh never reads a commit's diff again, and bar 3 times uncached commit diffs, so
- * commit diffs stay out.
- */
-const DIFF_CACHE_SIZE = 4;
-const diffCache = new Map<string, FileDiff>();
+const WORKING_DIFF_CACHE_SIZE = 4;
+const workingDiffCache = new Map<string, FileDiff>();
 
 /** What one side's content depends on: its object name, or the working file's size, times, and inode. Null when the file cannot be checked. */
 async function sideKey(repo: Repository, file: ChangedFile, side: Side): Promise<string | null> {
@@ -568,12 +554,12 @@ async function readFileDiff(repo: Repository, listed: Listing, change: Change, s
   if (isModeOnly(change)) return { kind: 'modeOnly', file, oldMode: modeOf(old), newMode: modeOf(current) };
   const sides = cached ? await Promise.all([sideKey(repo, file, old), sideKey(repo, file, current)]) : [null];
   const key = sides.includes(null) ? null : JSON.stringify([repo.path, file, showLarge, ...sides]);
-  const known = key === null ? undefined : diffCache.get(key);
+  const known = key === null ? undefined : workingDiffCache.get(key);
   if (known) return known;
   const diff = await readTextDiff(repo, listed, change, showLarge);
   if (key !== null) {
-    diffCache.set(key, diff);
-    for (const oldest of diffCache.keys()) if (diffCache.size > DIFF_CACHE_SIZE) diffCache.delete(oldest);
+    workingDiffCache.set(key, diff);
+    for (const oldest of workingDiffCache.keys()) if (workingDiffCache.size > WORKING_DIFF_CACHE_SIZE) workingDiffCache.delete(oldest);
   }
   return diff;
 }

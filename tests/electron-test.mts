@@ -1,9 +1,9 @@
-import assert from 'node:assert/strict';
-import {existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {_electron} from 'playwright';
 import type {ElectronApplication, Page} from 'playwright';
 import {createFixtures} from '../scripts/fixtures.mts';
+import {realGit} from '../scripts/isolated-git.mts';
 
 /** Shared setup for the unit tests that start the Electron app. */
 export const root = path.resolve(import.meta.dirname, '..');
@@ -11,13 +11,6 @@ export const root = path.resolve(import.meta.dirname, '..');
 /** The process environment without ELECTRON_RUN_AS_NODE, which would start Electron as plain Node. */
 export function appEnv(): Record<string, string> {
   return Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'));
-}
-
-/** The real git on PATH, for a stand-in git that logs or slows calls and then runs it. */
-function realGit(): string {
-  const real = (process.env.PATH ?? '').split(':').map(each => path.join(each, 'git')).find(file => existsSync(file));
-  if (!real) assert.fail('git is not on PATH');
-  return real;
 }
 
 export async function waitFor(check: () => boolean, ms: number): Promise<boolean> {

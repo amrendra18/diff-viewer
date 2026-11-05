@@ -87,7 +87,6 @@ function bringForward(window: BrowserWindow | undefined): void {
 
 /** A hand-off and the time its answer is due: 15 seconds after it arrived, however long it waits in the queue. */
 type HandOff = { repository: string; readyFile: string; source: SourceArgument | null; deadline: number };
-/** Hand-offs from later `diff-viewer open` calls, handled one at a time. */
 const handOffQueue: HandOff[] = [];
 let handOffReady = false;
 let draining = false;
@@ -107,7 +106,6 @@ function parseHandOff(value: unknown, dataDirectory: string): HandOff | null {
   return data.source !== null && source === null ? null : { repository: data.repository, readyFile: data.readyFile, source, deadline: deadlineFromNow() };
 }
 
-/** Why a hand-off failed, with the error code the installed command prints. */
 class HandOffFailure extends Error {
   readonly code: string;
   constructor(code: string, message: string) { super(message); this.code = code; }

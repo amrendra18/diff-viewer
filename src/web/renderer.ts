@@ -161,8 +161,6 @@ function showProblem(problem: Problem): void {
   else diffArea.replaceChildren(problemNotice(problem));
 }
 
-/* ---------- screens ---------- */
-
 function show(next: Screen): void {
   screen = next;
   closeMenu();
@@ -264,8 +262,6 @@ function renderHeader(): void {
   byId('branch').textContent = repo ? repo.branch ?? 'detached HEAD' : '';
   document.title = repo ? `${repo.name}${TITLE_SUFFIX}` : 'diff-viewer';
 }
-
-/* ---------- opening repositories ---------- */
 
 function opened(answer: Result<RepoInfo> | Refused | null): void {
   // Null: the user cancelled, or the repository opened or was focused in another window.
@@ -389,8 +385,6 @@ async function showRequested(view: RequestedView): Promise<void> {
  */
 const reportOf = (listed: Listed): ViewReport => (listed.ok ? { ok: true, firstFile: listed.files[0]?.path ?? null } : { ok: false, problem: listed.error.kind, message: describe(listed.error).slice(-VIEW_MESSAGE_LIMIT) });
 
-/* ---------- commits ---------- */
-
 function commitButton(commit: CommitSummary): HTMLButtonElement {
   const button = element('button', 'commit');
   button.dataset.hash = commit.hash;
@@ -445,8 +439,6 @@ async function pasteCommit(): Promise<void> {
   row?.scrollIntoView({ block: 'nearest' });
   await selectCommit(answer.value);
 }
-
-/* ---------- files ---------- */
 
 const CHIP = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R', unmerged: 'U' } as const;
 const STATUS_WORD = { added: 'Added', modified: 'Modified', deleted: 'Deleted', renamed: 'Renamed', unmerged: 'Unmerged, has a merge conflict' } as const;
@@ -716,8 +708,6 @@ async function selectFile(file: ChangedFile, showLarge: boolean, keepScroll: num
   display(answer.ok ? diffBody(answer.value, origin) : problemNotice(answer.error), answer.ok ? answer.value : null);
 }
 
-/* ---------- the diff ---------- */
-
 const validColor = (color: TokenColor | null) => (color && HEX_COLOR.test(color.light) && HEX_COLOR.test(color.dark) ? color : null);
 
 /** Columns of leading white space, a tab counting as the stylesheet's tab-size of 2. */
@@ -853,8 +843,6 @@ function diffBody(diff: FileDiff, origin: Origin): HTMLElement {
   return panel;
 }
 
-/* ---------- left pane: divider, collapse, rail ---------- */
-
 function setSplit(value: number): void {
   pane.split = Math.min(SPLIT.max, Math.max(SPLIT.min, value));
   const percent = Math.round(pane.split * 100);
@@ -896,8 +884,6 @@ function renderRail(): void {
   const what = file && selection ? `, ${file.path} (file ${placeOf(selection.files, file) + 1} of ${selection.files.length})` : origin && origin.kind !== 'commit' && !file ? ', no changes' : '';
   byId('rail-info').title = `${where}${what}. Show sidebar (⌘B)`;
 }
-
-/* ---------- events ---------- */
 
 split.addEventListener('pointerdown', event => {
   if (event.button !== 0) return;

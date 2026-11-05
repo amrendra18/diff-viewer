@@ -1,8 +1,9 @@
 import {packager} from '@electron/packager';
-import {execFileSync, spawnSync} from 'node:child_process';
+import {spawnSync} from 'node:child_process';
 import {existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {build} from './build.mts';
+import {personalGitOut} from './isolated-git.mts';
 
 const root = path.resolve(import.meta.dirname, '..');
 export const BUNDLE = path.join(root, '.local/build/diff-viewer.app');
@@ -24,11 +25,14 @@ function run(command: string, args: string[]): void {
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} exited ${result.status ?? 'none'}.`);
 }
 
+export function checkoutIdentity(folder: string, base: Readonly<Record<string, string | undefined>> = process.env): {revision: string; modified: boolean} {
+  const git = (args: string[]) => personalGitOut(['-C', folder, ...args], {base}).trim();
+  return {revision: git(['rev-parse', 'HEAD']), modified: git(['status', '--porcelain']).length > 0};
+}
+
 export async function packageApp(): Promise<string> {
   const version: string = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version;
-  const gitEnvironment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
-  const git = (args: string[]) => execFileSync('git', ['-C', root, ...args], {encoding: 'utf8', env: gitEnvironment}).trim();
-  const identity = {version, revision: git(['rev-parse', 'HEAD']), modified: git(['status', '--porcelain']).length > 0};
+  const identity = {version, ...checkoutIdentity(root)};
   build();
   const electronVersion: string = JSON.parse(readFileSync(path.join(root, 'node_modules/electron/package.json'), 'utf8')).version;
   // The Electron install step already downloaded and checked this zip; reusing it keeps packaging offline.

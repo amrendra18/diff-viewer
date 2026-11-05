@@ -1,7 +1,7 @@
-import {execFileSync} from 'node:child_process';
 import {existsSync, mkdirSync, readdirSync, utimesSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {LARGE_FILE_BYTES} from '../src/domain/types.ts';
+import {isolatedGitOut} from './isolated-git.mts';
 
 type FileChange =
   | {path: string; content: string | Buffer; mode?: '100644' | '100755' | '120000'}
@@ -39,11 +39,7 @@ const FIRST_TIME = 1767225600;
 const SIGNATURE = ['-----BEGIN SSH SIGNATURE-----', 'U1NIU0lHAAAAAQ==', '-----END SSH SIGNATURE-----'];
 
 function git(folder: string, args: string[], input?: string | Buffer): string {
-  const inherited = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
-  return execFileSync('git', ['-C', folder, '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.autocrlf=false', ...args], {
-    encoding: 'utf8', input, maxBuffer: 64 * 1024 * 1024,
-    env: {...inherited, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null'},
-  }).trim();
+  return isolatedGitOut(['-C', folder, '-c', 'core.autocrlf=false', ...args], {input}).trim();
 }
 
 const lines = (rows: string[]) => rows.join('\n') + '\n';
