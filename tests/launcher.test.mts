@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
-import {env as gitEnv, withoutHeadObject} from './repo-sandbox.mts';
+import {realGit} from '../scripts/isolated-git.mts';
+import {GIT_ENVIRONMENT} from '../src/app/git-settings.ts';
+import {caseGit, withoutHeadObject} from './repo-sandbox.mts';
 
 const root = path.resolve(import.meta.dirname, '..');
 const command = path.join(root, 'bin/diff-viewer');
@@ -14,9 +16,8 @@ const scratch = (label: string) => mkdtempSync(`/private/tmp/diff-viewer-${label
 /** A repository in `parent` with one commit, made with fixed test settings. */
 function committedRepository(parent: string, name: string): string {
   const repository = path.join(parent, name);
-  for (const args of [['init', '-q', repository], ['-C', repository, '-c', 'commit.gpgsign=false', 'commit', '-q', '--allow-empty', '-m', 'first']]) {
-    assert.equal(spawnSync('git', args, {env: gitEnv}).status, 0, `git ${args.join(' ')}`);
-  }
+  caseGit(['init', '-q', repository]);
+  caseGit(['-C', repository, 'commit', '-q', '--allow-empty', '-m', 'first']);
   return repository;
 }
 
@@ -143,7 +144,7 @@ test('launcher: a state path that is a file returns one JSON error before starti
     mkdirSync(repository);
     writeFileSync(fakeApp, `#!/bin/sh\necho started > "${marker}"\n`, {mode: 0o755});
     writeFileSync(stateFile, 'a file');
-    assert.equal(spawnSync('git', ['init', '-q', repository]).status, 0);
+    caseGit(['init', '-q', repository]);
     const result = spawnSync(fakeCommand, ['open', repository, '--format', 'json'], {
       encoding: 'utf8', env: {...process.env, DIFF_VIEWER_STATE_DIR: stateFile},
     });
@@ -159,7 +160,7 @@ test('launcher: a bare repository reaches the app bundle check', () => {
   try {
     const fakeCommand = copiedLauncher(temp);
     const bare = path.join(temp, 'bare.git');
-    assert.equal(spawnSync('git', ['init', '--bare', '-q', bare]).status, 0);
+    caseGit(['init', '--bare', '-q', bare]);
     const result = spawnSync(fakeCommand, ['open', bare, '--format', 'json'], {encoding: 'utf8', env: {...process.env, DIFF_VIEWER_STATE_DIR: path.join(temp, 'state')}});
     assert.equal(result.status, 1);
     assert.equal(JSON.parse(result.stdout).error.code, 'missing-app');
@@ -179,7 +180,7 @@ test('launcher: the command called through a link, as installed in ~/.local/bin,
     assert.equal(version.status, 0, `--version through the link: ${version.stderr}`);
     assert.equal(JSON.parse(version.stdout).version, JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version, 'the version comes from the checkout\'s package.json');
     const bare = path.join(temp, 'bare.git');
-    assert.equal(spawnSync('git', ['init', '--bare', '-q', bare]).status, 0);
+    caseGit(['init', '--bare', '-q', bare]);
     const opened = run('open', bare, '--format', 'json');
     assert.equal(opened.status, 1, opened.stderr);
     assert.deepEqual(JSON.parse(opened.stdout).error, {code: 'missing-app', message: `App bundle is missing at ${path.join(checkout, '.local/build/diff-viewer.app/Contents/MacOS/diff-viewer')}.`, next: [`run scripts/package in ${checkout}`]},
@@ -195,7 +196,7 @@ test('launcher: a folder inside a bare repository opens and reports the bare rep
     const bare = path.join(temp, 'bare.git');
     const opened = path.join(temp, 'opened');
     mkdirSync(path.dirname(fakeApp), {recursive: true});
-    assert.equal(spawnSync('git', ['init', '--bare', '-q', bare]).status, 0);
+    caseGit(['init', '--bare', '-q', bare]);
     writeFileSync(fakeApp, `#!/bin/sh
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--open" ]; then shift; printf '%s' "$1" > "${opened}"; fi
@@ -219,7 +220,7 @@ test('launcher: inherited Git settings and a trailing space keep the requested r
     const fakeCommand = copiedLauncher(temp);
     const normal = path.join(temp, 'normal');
     const spaced = path.join(temp, 'space ');
-    for (const repository of [normal, spaced]) assert.equal(spawnSync('git', ['init', '-q', repository]).status, 0);
+    for (const repository of [normal, spaced]) caseGit(['init', '-q', repository]);
     const run = (repository: string, extra: Record<string, string> = {}) => spawnSync(fakeCommand, ['open', repository, '--format', 'json'], {
       encoding: 'utf8', env: {...process.env, DIFF_VIEWER_STATE_DIR: path.join(temp, 'state'), ...extra},
     });
@@ -242,8 +243,7 @@ test('launcher: an app that exits early or never becomes ready returns one error
     mkdirSync(path.dirname(fakeApp), {recursive: true});
     mkdirSync(repository);
     mkdirSync(state);
-    const git = spawnSync('git', ['init', '-q', repository]);
-    assert.equal(git.status, 0);
+    caseGit(['init', '-q', repository]);
     const run = () => spawnSync(fakeCommand, ['open', repository, '--format', 'json'], {
       encoding: 'utf8', timeout: 25000, env: {...process.env, DIFF_VIEWER_STATE_DIR: state},
     });
@@ -273,7 +273,7 @@ test('launcher: a secondary app may exit before the primary reports the focused 
     const repository = path.join(temp, 'repository');
     mkdirSync(path.dirname(fakeApp), {recursive: true});
     mkdirSync(repository);
-    assert.equal(spawnSync('git', ['init', '-q', repository]).status, 0);
+    caseGit(['init', '-q', repository]);
     writeFileSync(fakeApp, `#!/bin/sh
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--ready-file" ]; then shift; ready="$1"; fi
@@ -299,7 +299,7 @@ test('launcher: a ready file with ready false returns the app\'s error code and 
     const repository = path.join(temp, 'repository');
     const signal = path.join(temp, 'signal.json');
     mkdirSync(path.dirname(fakeApp), {recursive: true});
-    assert.equal(spawnSync('git', ['init', '-q', repository]).status, 0);
+    caseGit(['init', '-q', repository]);
     writeFileSync(fakeApp, `#!/bin/sh
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--ready-file" ]; then shift; ready="$1"; fi
@@ -370,6 +370,10 @@ test('launcher-help: the help verb and JSON help for open list outputs and every
     assert.match(text.stdout, /^Version: --version names the app built in \.local\/build\. An app that is already running keeps its own build until Command-Q\.$/m, 'help says which app --version names');
     assert.match(text.stdout, /PATH may be relative, such as \./, 'help says a relative path works');
     const codes = ['bad-call', 'unknown-verb', 'unknown-flag', 'bad-format', 'bad-source', 'git-missing', 'git-failed', 'not-a-repository', 'unknown-commit', 'unavailable-source', 'missing-app', 'bad-state-dir', 'state-unavailable', 'app-not-ready', 'damaged-build'];
+    const readmeParts = readFileSync(path.join(root, 'README.md'), 'utf8').split('The error codes for a repository:');
+    assert.equal(readmeParts.length, 2, 'README.md keeps the sentence "The error codes for a repository:" before its table');
+    const table = readmeParts[1].split('\n\n')[1];
+    assert.deepEqual([...table.matchAll(/^\| \d+ \| `([a-z-]+)` /gm)].map(match => match[1]), ['git-missing', 'not-a-repository', 'git-failed', 'unknown-commit', 'unavailable-source', 'app-not-ready'], 'the README table lists each code about a repository');
     const launcher = readFileSync(command, 'utf8');
     const used = [...launcher.matchAll(/fail\('([a-z-]+)'/g)].map(match => match[1]);
     assert.deepEqual([...new Set(used)].sort(), [...codes].sort(), 'the expected list names every code the launcher can print');
@@ -382,6 +386,17 @@ test('launcher-help: the help verb and JSON help for open list outputs and every
       assert.equal(result.status, 0, `${args.join(' ')}: ${result.stdout} ${result.stderr}`);
       assert.equal(result.stdout.trim().split('\n').length, 1);
       assert.deepEqual(JSON.parse(result.stdout), {verbs: ['help', 'open'], help: text.stdout.replace(/\n$/, '')});
+    }
+    for (const args of [['--help', '--format', 'markdown'], ['open', '--help', '--format', 'markdown']]) {
+      const result = run(...args);
+      assert.equal(result.status, 0, `${args.join(' ')}: ${result.stdout} ${result.stderr}`);
+      assert.equal(result.stdout, markdown.stdout, `${args.join(' ')} prints the same text as help --format markdown`);
+    }
+    for (const args of [['--help', '--format', 'yaml'], ['--help', '--bogus'], ['open', '--help', '--format', 'yaml']]) {
+      const result = run(...args);
+      assert.equal(result.status, 2, `${args.join(' ')}: ${result.stdout} ${result.stderr}`);
+      assert.doesNotMatch(result.stderr, /Unknown verb/, `${args.join(' ')} names the flag`);
+      assert.match(result.stderr, /Valid flags: --format json\|markdown\./, `${args.join(' ')} lists the formats`);
     }
     const helpHelp = run('help', '--help');
     assert.equal(helpHelp.status, 0);
@@ -400,7 +415,7 @@ test('launcher: only git\'s "not a git repository" answer gives not-a-repository
   try {
     const fakeCommand = copiedLauncher(temp);
     const repository = path.join(temp, 'repository');
-    assert.equal(spawnSync('git', ['init', '-q', repository]).status, 0);
+    caseGit(['init', '-q', repository]);
     writeFileSync(path.join(repository, '.git/config'), '\n[broken\n', {flag: 'a'});
     const run = (target: string) => spawnSync(fakeCommand, ['open', target, '--format', 'json'], {
       encoding: 'utf8', env: {...process.env, DIFF_VIEWER_STATE_DIR: path.join(temp, 'state')},
@@ -463,7 +478,7 @@ test('launcher: git missing from PATH is its own error, not "not a repository"',
   try {
     const fakeCommand = copiedLauncher(temp);
     const repository = path.join(temp, 'repository');
-    assert.equal(spawnSync('git', ['init', '-q', repository]).status, 0);
+    caseGit(['init', '-q', repository]);
     const nodeOnly = path.join(temp, 'node-only');
     mkdirSync(nodeOnly);
     symlinkSync(process.execPath, path.join(nodeOnly, 'node'));
@@ -479,26 +494,23 @@ test('launcher: git missing from PATH is its own error, not "not a repository"',
   } finally { rmSync(temp, {recursive: true, force: true}); }
 });
 
-test('launcher: its own git calls set GIT_NO_LAZY_FETCH=1 and GIT_ALLOW_PROTOCOL=none, as the app does', () => {
+test('launcher: its own git calls set every variable of GIT_ENVIRONMENT, as the app does', () => {
   const temp = scratch('launcher-no-fetch-');
   try {
     const fakeCommand = copiedLauncher(temp);
-    const repository = path.join(temp, 'repository');
-    assert.equal(spawnSync('git', ['init', '-q', repository]).status, 0);
-    assert.equal(spawnSync('git', ['-C', repository, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'first']).status, 0);
-    const real = (process.env.PATH ?? '').split(':').map(each => path.join(each, 'git')).find(file => existsSync(file));
-    if (!real) assert.fail('git is not on PATH');
-    // A git that records the two variables of each call, then runs the real git.
+    const repository = committedRepository(temp, 'repository');
+    const real = realGit();
+    const recorded = GIT_ENVIRONMENT.map(([name]) => `\${${name}-unset}`).join(' ');
     const bin = path.join(temp, 'fake-bin'), calls = path.join(temp, 'calls');
     mkdirSync(bin);
-    writeFileSync(path.join(bin, 'git'), `#!/bin/sh\necho "\${GIT_NO_LAZY_FETCH-unset} \${GIT_ALLOW_PROTOCOL-unset}" >> '${calls}'\nexec '${real}' "$@"\n`, {mode: 0o755});
+    writeFileSync(path.join(bin, 'git'), `#!/bin/sh\necho "${recorded}" >> '${calls}'\nexec '${real}' "$@"\n`, {mode: 0o755});
     const result = spawnSync(fakeCommand, ['open', repository, '--source', 'commit:HEAD', '--format', 'json'], {
       encoding: 'utf8', env: {...process.env, PATH: `${bin}:${process.env.PATH ?? ''}`, DIFF_VIEWER_STATE_DIR: path.join(temp, 'state')},
     });
     assert.equal(JSON.parse(result.stdout).error.code, 'missing-app', 'the call reached the bundle check after all its git calls');
     const lines = readFileSync(calls, 'utf8').trim().split('\n');
     assert.equal(lines.length, 3, 'two rev-parse calls for the repository and one for the commit');
-    assert.deepEqual([...new Set(lines)], ['1 none'], `each git call sets both variables (got ${JSON.stringify(lines)})`);
+    assert.deepEqual([...new Set(lines)], [GIT_ENVIRONMENT.map(([, value]) => value).join(' ')], `each git call sets every variable (got ${JSON.stringify(lines)})`);
   } finally { rmSync(temp, {recursive: true, force: true}); }
 });
 
@@ -510,7 +522,7 @@ test('launcher-codes: each call error gives its code and exit, starts no app, an
     const marker = path.join(temp, 'started');
     const repository = committedRepository(temp, 'repository');
     const bare = path.join(temp, 'bare.git');
-    assert.equal(spawnSync('git', ['init', '--bare', '-q', bare]).status, 0);
+    caseGit(['init', '--bare', '-q', bare]);
     const run = (args: string[], state = path.join(temp, 'state')) => spawnSync(fakeCommand, [...args, '--format', 'json'], {encoding: 'utf8', env: {...process.env, DIFF_VIEWER_STATE_DIR: state}});
     const expectCode = (args: string[], code: string, status: number, state?: string) => {
       const result = run(args, state);

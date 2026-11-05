@@ -18,7 +18,7 @@ const CANARY = {DIFF_VIEWER_CANARY: random()};
  */
 const DECOY_ENV = {
   PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...CANARY,
-  CLAUDE_CODE_MESSAGING_TOKEN: random(), CLAUDE_CODE_SESSION_ID: random(), SSH_AUTH_SOCK: `/private/tmp/${random()}`, TERM_SESSION_ID: random(),
+  DIFF_VIEWER_DECOY_TOKEN: random(), DIFF_VIEWER_DECOY_SESSION_ID: random(), SSH_AUTH_SOCK: `/private/tmp/${random()}`, TERM_SESSION_ID: random(),
 };
 
 function step(label: string, command: string, args: string[], env: NodeJS.ProcessEnv = process.env): void {
@@ -54,7 +54,7 @@ function main(level: string, fixturesOnly: boolean): void {
     plantedFault('rows', {...withoutRealRepositories(), ...CANARY}, 'a commit-diff failure on the swapped rows', [/^failed commit-diff: AssertionError.*change row shows old text on the left and new text on the right/m]);
     plantedFault('env', DECOY_ENV, 'the trace scan naming the canary and the four stand-ins in commit-diff.zip', [
       /^proven commit-diff$/m,
-      ...['CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_SESSION_ID', 'DIFF_VIEWER_CANARY', 'SSH_AUTH_SOCK', 'TERM_SESSION_ID']
+      ...['DIFF_VIEWER_CANARY', 'DIFF_VIEWER_DECOY_SESSION_ID', 'DIFF_VIEWER_DECOY_TOKEN', 'SSH_AUTH_SOCK', 'TERM_SESSION_ID']
         .map(name => new RegExp(`^failed traces hold no shell environment: traces/commit-diff\\.zip holds .*\\b${name}\\b`, 'm')),
     ]);
     plantedFault('launcher-write', {...withoutRealRepositories(), ...CANARY}, 'a launcher-open failure on a changed fixture repository', [
@@ -83,7 +83,9 @@ if (args.includes('--help') || args.length !== (fixturesOnly ? 2 : 1) || !['fast
     'full --fixtures-only runs on the generated fixtures alone and ignores both variables.',
     'The last line is the exit code.',
   ].join('\n'));
-  process.exit(args.includes('--help') ? 0 : 2);
+  const code = args.includes('--help') ? 0 : 2;
+  console.log(`check ${['fast', 'full'].includes(args[0]) ? `${args[0]} ` : ''}exit ${code}`);
+  process.exit(code);
 }
 const missing = args[0] === 'full' && !fixturesOnly ? REAL_REPOSITORIES.filter(name => !process.env[name]) : [];
 if (missing.length) {

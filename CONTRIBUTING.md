@@ -4,7 +4,7 @@ Read [AGENTS.md](AGENTS.md) first. Its rules hold for people and coding agents a
 
 ## Set up
 
-Follow "Install" in the [README](README.md#install).
+Follow "Install" in the [README](README.md#install). The tests need git 2.32 or newer, which honors `GIT_CONFIG_GLOBAL`.
 
 ## Checks
 
@@ -27,7 +27,7 @@ Run these from the top of the checkout. `./scripts/check` prints its exit code o
 ## Changes
 
 1. Follow [AGENTS.md](AGENTS.md) rules 5 (failing test first, smallest change) and 8 (a changed journey updates `verify/features/` and the harness together).
-2. Pin a new dependency to an exact version. It must have been released at least 21 days earlier; `npm view NAME time` shows release dates.
+2. Pin a new dependency to an exact version. It must have been released at least 21 days earlier; `npm view NAME time` shows release dates. Unit test `dependency-pins` checks the exact pins.
 3. In a pull request, list the commands you ran with their exit codes, and anything you skipped.
 
 `.gitmessage` is a commit message template; `git config commit.template .gitmessage` turns it on. It is optional.

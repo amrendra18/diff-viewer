@@ -119,7 +119,6 @@ export type FileDiff =
   | { readonly kind: 'symlink'; readonly file: ChangedFile; readonly oldTarget: string | null; readonly newTarget: string | null }
   | { readonly kind: 'modeOnly'; readonly file: ChangedFile; readonly oldMode: string; readonly newMode: string };
 
-/** Measured on real repositories: diffs other than lockfiles stayed under 3,300 lines, and Shiki highlights 5,000 lines in about 190 ms. */
 export const LARGE_FILE_LINES = 5000;
 export const LARGE_FILE_BYTES = 200000;
 /** Unchanged lines shown around each change, as git shows by default. */

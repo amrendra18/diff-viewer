@@ -1,6 +1,5 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {execFileSync, spawnSync} from 'node:child_process';
 import {chmodSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync} from 'node:fs';
 import {open as openFile} from 'node:fs/promises';
 import type {FileHandle} from 'node:fs/promises';
@@ -9,7 +8,8 @@ import {UNTRACKED_READS, changedFiles, commitPage, fileDiff, openRepository, rep
 import type {Repository} from '../src/app/git.ts';
 import type {FileDiff, FilePath, Source} from '../src/domain/types.ts';
 import {fingerprint} from '../scripts/fingerprint.mts';
-import {env, lines, scratchFolder, shape, value, withGitOnPath} from './repo-sandbox.mts';
+import {isolatedGit} from '../scripts/isolated-git.mts';
+import {caseGit, lines, scratchFolder, shape, value, withGitOnPath} from './repo-sandbox.mts';
 
 const {scratch, sandbox} = scratchFolder('working');
 const STAGED: Source = {kind: 'staged'}, UNSTAGED: Source = {kind: 'unstaged'};
@@ -166,7 +166,7 @@ test('submodule: new commits and a dirty tree inside a submodule show its commit
   box.git('-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', inner.folder, 'mod');
   box.commit('Add the submodule');
   const sub = path.join(box.folder, 'mod');
-  const subGit = (...args: string[]) => execFileSync('git', ['-C', sub, '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], {encoding: 'utf8', env}).trim();
+  const subGit = (...args: string[]) => caseGit(['-C', sub, ...args]).trim();
   writeFileSync(path.join(sub, 'i.txt'), 'i2\n');
   subGit('commit', '--quiet', '-am', 'Inner two');
   const second = subGit('rev-parse', 'HEAD');
@@ -328,7 +328,7 @@ test('nested-repository: an untracked folder that holds its own repository is on
   const box = sandbox('nested');
   box.write('kept.txt', 'kept\n');
   box.commit('Start');
-  execFileSync('git', ['init', '--quiet', path.join(box.folder, 'nested')], {env});
+  caseGit(['init', '--quiet', path.join(box.folder, 'nested')]);
   writeFileSync(path.join(box.folder, 'nested', 'inside.txt'), 'inside\n');
   const repo = await open(box.folder);
   assert.deepEqual(await listOf(repo, UNSTAGED), ['added nested submodule null/null untracked']);
@@ -354,7 +354,7 @@ test('repository-removed-bare: a bare repository removed while open answers repo
   box.write('a.txt', 'a\n');
   box.commit('Start');
   const bare = path.join(scratch, 'removed.git');
-  execFileSync('git', ['clone', '--quiet', '--bare', box.folder, bare], {env});
+  caseGit(['clone', '--quiet', '--bare', box.folder, bare]);
   const repo = await open(bare);
   assert.equal(value(await repositoryInfo(repo)).commits.commits.length, 1, 'control: the open repository lists its commit');
   renameSync(bare, `${bare}-elsewhere`);
@@ -421,6 +421,22 @@ test('filtered-working-file: a clean filter that changes a working file\'s line 
   assert.match(!answer.ok && answer.error.kind === 'unreadableFile' ? answer.error.message : '', /filter/, 'the message names the likely cause');
 });
 
+test('filtered-working-file: a working-tree-encoding attribute gives "could not be read" when the line count differs, and the file on disk when it does not', async () => {
+  const box = sandbox('working-tree-encoding');
+  const utf16 = (text: string) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+  box.write('.gitattributes', '*.utf16 working-tree-encoding=UTF-16LE-BOM\n*.latin1 working-tree-encoding=ISO-8859-1\n');
+  box.write('wide.utf16', utf16('a\nb\nc\n'));
+  box.write('narrow.latin1', Buffer.from('a\nb\nc\n', 'latin1'));
+  box.commit('Start');
+  box.write('wide.utf16', utf16('a\nB\nc\n'));
+  box.write('narrow.latin1', Buffer.from('a\n\u00e9\nc\n', 'latin1'));
+  const repo = await open(box.folder);
+  const wide = await fileDiff(repo, UNSTAGED, 'wide.utf16' as FilePath, false);
+  assert.equal(!wide.ok && wide.error.kind, 'unreadableFile', 'a NUL byte after each newline gives the UTF-8 reading an extra line');
+  const narrow = await diffOf(repo, UNSTAGED, 'narrow.latin1');
+  assert.deepEqual(narrow.kind === 'text' && shape(narrow.rows), ['context 1:a|1:a', 'change 2:b|2:\uFFFD', 'context 3:c|3:c'], 'the right side is the file on disk, read as UTF-8, with git\'s marks');
+});
+
 test('file-click-path-limited-working: a staged or unstaged file\'s diff lists only that file', async () => {
   const box = sandbox('path-limited-working');
   box.write('ren.txt', lines(4));
@@ -461,7 +477,7 @@ test('stale-index: listing and reading staged and unstaged changes leaves a stal
   await diffOf(repo, UNSTAGED, 'b.txt');
   await diffOf(repo, UNSTAGED, 'u.txt');
   assert.deepEqual(print(), before, 'the index bytes and time are unchanged');
-  spawnSync('git', ['-C', box.folder, 'diff', '--quiet'], {env: {...env, GIT_OPTIONAL_LOCKS: '0'}});
+  isolatedGit(['-C', box.folder, 'diff', '--quiet'], {env: {GIT_OPTIONAL_LOCKS: '0'}});
   assert.notDeepEqual(print(), before, 'positive control: plain git diff rewrites the same index, even with GIT_OPTIONAL_LOCKS=0');
 });
 
@@ -471,7 +487,7 @@ const gitFolderPrint = (folder: string) => ({files: fingerprint(path.join(folder
 /** The app's reads left .git as `before`; then plain git status, as the positive control, must change it. */
 function assertGitFolderKept(folder: string, before: ReturnType<typeof gitFolderPrint>): void {
   assert.deepEqual(gitFolderPrint(folder), before, 'every file under .git and the index time are unchanged');
-  spawnSync('git', ['-C', folder, 'status', '--porcelain'], {env});
+  isolatedGit(['-C', folder, 'status', '--porcelain']);
   assert.notDeepEqual(gitFolderPrint(folder), before, 'positive control: git status without GIT_OPTIONAL_LOCKS=0 rewrites the same index');
 }
 

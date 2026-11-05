@@ -96,7 +96,8 @@ The error codes for a repository:
 | 2 | `not-a-repository` | git found no repository at that path, or the folder does not exist. |
 | 3 | `git-failed` | git could not read the repository for another reason, such as a broken `.git/config` or a commit object git cannot read. `message` holds git's own error line. |
 | 4 | `unknown-commit` | git knows no commit by the name given in `--source commit:REV`. |
-| 5 | `app-not-ready` | The app gave no answer within 20 seconds. |
+| 5 | `unavailable-source` | A bare repository has no staged or unstaged changes, so only `--source commit:REV` works. |
+| 6 | `app-not-ready` | The window or view did not appear. The app gives up after 15 seconds and says why, also when the window closes first. The command stops waiting for an answer after 20 seconds. |
 
 How `open` behaves with an app or a window that already exists:
 
@@ -105,13 +106,13 @@ How `open` behaves with an app or a window that already exists:
 3. When the repository already has a window, `open` waits until that window shows the repository view, also without `--source`. A card over the repository, such as a failed pick from the recent list, is closed first.
 4. A window that could not load its repository tries again, and reports git's message when it fails again.
 
-`diff-viewer --help` and `diff-viewer open --help` list inputs, outputs, effects, and exit codes. `diff-viewer help --format json` prints the same help as one JSON object. So do `diff-viewer --help --format json` and `diff-viewer open --help --format json`. The help lists every error code. `diff-viewer --version --format json` reports the package version, the full Git revision, and whether the checkout had uncommitted changes when `scripts/package` built the app. Before the first `scripts/package` run, the revision is `unknown`. `tests/launcher.test.mts` checks the help, version, and error outputs during `./scripts/check fast`.
+`diff-viewer --help` and `diff-viewer open --help` list inputs, outputs, effects, and exit codes. `diff-viewer help --format json` prints the same help as one JSON object, and `--format markdown` prints it under a Markdown title. Both formats also work with `diff-viewer --help` and `diff-viewer open --help`. The help lists every error code. `diff-viewer --version --format json` reports the package version, the full Git revision, and whether the checkout had uncommitted changes when `scripts/package` built the app. Before the first `scripts/package` run, the revision is `unknown`. `tests/launcher.test.mts` checks the help, version, and error outputs during `./scripts/check fast`.
 
 A line you can give a coding agent: "When `diff-viewer` is on PATH, run `diff-viewer open <path> --source unstaged --format json` and report its object; otherwise inspect changes with git."
 
 ## What install writes
 
-The install block writes `node_modules/`, `dist/`, `.local/npm-cache/`, `.local/electron-cache/`, and `.local/build/` inside this checkout, plus the link `~/.local/bin/diff-viewer`. It downloads the pinned Node packages and the Electron binary. Nothing else uses the network. `open` writes its own app data in `~/Library/Application Support/diff-viewer`. Set `DIFF_VIEWER_STATE_DIR` to an absolute folder to keep a run's data elsewhere. The app data includes `recent.json` and Electron's Chromium files. macOS also writes `~/Library/Preferences/local.diff-viewer.plist` when the packaged app runs; it holds only system settings such as text direction.
+The install block writes `node_modules/`, `dist/`, `.local/npm-cache/`, `.local/electron-cache/`, and `.local/build/` inside this checkout, plus the link `~/.local/bin/diff-viewer`. It downloads the pinned Node packages and the Electron binary. Nothing else uses the network. `open` writes its own app data in `~/Library/Application Support/diff-viewer`, the app data folder. Set `DIFF_VIEWER_STATE_DIR` to an absolute folder to keep a run's data elsewhere. The error codes `bad-state-dir` and `state-unavailable` and `--data-dir` in `scripts/start` name the same folder. The app data includes `recent.json` and Electron's Chromium files. macOS also writes `~/Library/Preferences/local.diff-viewer.plist` when the packaged app runs; it holds only system settings such as text direction.
 
 ## Using the app
 

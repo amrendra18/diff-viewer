@@ -1,16 +1,14 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
 import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {
   ACCENTED_SUBJECT, BIG_FILE, BIG_FILE_EDITS, BIG_FILE_LINES, createCleanPractice, createFixtures, HISTORY_COMMITS, HOSTILE_FILE, HTML_SUBJECT, NEWEST_SUBJECT,
   SLOW_CPP_FILE, SPECIAL_EDIT_SUBJECT, SPECIAL_ROOT_SUBJECT, SPECIAL_TARGETS_SUBJECT, STEP_FILES, STEP_SUBJECT, SUBMODULE_COMMITS, TABLE_FILE, TABLE_FILE_LINES,
 } from '../scripts/fixtures.mts';
+import {isolatedGitOut} from '../scripts/isolated-git.mts';
 
-// The user's own git settings stay out: log.showSignature, for one, would print into the log output read here.
-const env = {...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_'))), GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'};
-const git = (folder: string, ...args: string[]) => execFileSync('git', ['-C', folder, ...args], {encoding: 'utf8', env});
+const git = (folder: string, ...args: string[]) => isolatedGitOut(['-C', folder, ...args]);
 
 function describe(root: string) {
   const {practice, history, special, step, bare} = createFixtures(root);

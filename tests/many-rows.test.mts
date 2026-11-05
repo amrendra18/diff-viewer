@@ -1,10 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
 import path from 'node:path';
 import {_electron} from 'playwright';
 import {appEnv, root} from './electron-test.mts';
-import {env, scratchFolder} from './repo-sandbox.mts';
+import {caseGit, scratchFolder} from './repo-sandbox.mts';
 
 const {scratch, sandbox} = scratchFolder('many-rows');
 const ABOVE_SPREAD_LIMIT = 130_000;
@@ -18,7 +17,7 @@ test('many-rows: 130,000 files in a commit, 130,000 rows in a file, and 130,000 
   const text = Array.from({length: ABOVE_SPREAD_LIMIT + 10}, (_, index) => `line ${index + 1}`);
   const edited = [...text.slice(0, -1), 'last line edited'];
   const files = Array.from({length: ABOVE_SPREAD_LIMIT}, (_, index) => `M 100644 inline many/${String(index).padStart(6, '0')}.txt\n${blob('x\n')}`).join('');
-  execFileSync('git', ['-C', box.folder, 'fast-import', '--quiet'], {env, maxBuffer: 1 << 28, input: [
+  caseGit(['-C', box.folder, 'fast-import', '--quiet'], {input: [
     commit(1, 'Add the long file', `M 100644 inline long.txt\n${blob(text.join('\n') + '\n')}`),
     commit(2, 'Edit its last line', `M 100644 inline long.txt\n${blob(edited.join('\n') + '\n')}`),
     commit(3, 'Add many files', files),

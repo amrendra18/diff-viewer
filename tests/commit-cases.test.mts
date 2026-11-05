@@ -1,6 +1,5 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {chmodSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
@@ -12,7 +11,7 @@ import {createFixtures, denseModule} from '../scripts/fixtures.mts';
 import {fingerprint} from '../scripts/fingerprint.mts';
 import {LARGE_FILE_BYTES} from '../src/domain/types.ts';
 import type {CommitHash, FileDiff, FilePath, Line} from '../src/domain/types.ts';
-import {env, lines, partialClone, scratchFolder, shape, textOf, value, withGitOnPath, withoutHeadObject} from './repo-sandbox.mts';
+import {caseGit, lines, partialClone, scratchFolder, shape, textOf, value, withGitOnPath, withoutHeadObject} from './repo-sandbox.mts';
 
 const {scratch, sandbox} = scratchFolder('cases');
 const open = async (folder: string): Promise<Repository> => value(await openRepository(folder));
@@ -242,7 +241,7 @@ test('submodule-symlink-mode: a submodule pointer, a symlink target, and a mode-
 test('bare-repository: a bare clone has commits only, with no staged or unstaged changes', async () => {
   const {practice} = createFixtures(path.join(scratch, 'fixtures'));
   const bare = path.join(scratch, 'practice.git');
-  execFileSync('git', ['clone', '--quiet', '--bare', practice, bare], {env});
+  caseGit(['clone', '--quiet', '--bare', practice, bare]);
   const repo = await open(bare);
   assert.equal(repo.bare, true);
   const info = value(await repositoryInfo(repo));
@@ -308,7 +307,7 @@ test('resolve-commit: a pasted prefix finds one commit on any branch; unknown or
   for (let mark = 1; mark <= 1000; mark++) {
     stream.push(`commit refs/heads/main\nmark :${mark}\ncommitter Case <case@example.invalid> ${1767225600 + mark} +0000\ndata 5\nc${String(mark).padStart(4, '0')}\n${mark > 1 ? `from :${mark - 1}\n` : ''}\n`);
   }
-  execFileSync('git', ['-C', box.folder, 'fast-import', '--quiet'], {input: stream.join(''), env});
+  caseGit(['-C', box.folder, 'fast-import', '--quiet'], {input: stream.join('')});
   const hashes = box.git('rev-list', 'main').split('\n');
   const byPrefix = new Map<string, string[]>();
   for (const hash of hashes) byPrefix.set(hash.slice(0, 4), [...byPrefix.get(hash.slice(0, 4)) ?? [], hash]);
@@ -384,8 +383,8 @@ test('crlf-lines: rows of a CRLF file hold no carriage return, and their colors 
 
 test('sha256-repository: a repository with 64-character object names lists, shows, and resolves its commits', async () => {
   const folder = path.join(scratch, 'sha256');
-  const git = (...args: string[]) => execFileSync('git', ['-C', folder, '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], {encoding: 'utf8', env}).trim();
-  execFileSync('git', ['init', '--quiet', '--object-format=sha256', '-b', 'main', folder], {env});
+  const git = (...args: string[]) => caseGit(['-C', folder, ...args]).trim();
+  caseGit(['init', '--quiet', '--object-format=sha256', '-b', 'main', folder]);
   writeFileSync(path.join(folder, 'notes.txt'), lines(5));
   git('add', 'notes.txt');
   git('commit', '--quiet', '-m', 'Add notes');
@@ -432,7 +431,7 @@ test('partial-clone-no-fetch: in a partial clone a commit lists its files withou
   assert.deepEqual(added.ok && added.value.kind === 'text' && shape(added.value.rows), ['change -|1:new'], 'a file whose blobs are in the clone still opens');
   assert.deepEqual({print: fingerprint(clone), packs: packs()}, before, 'git fetched nothing, and .git is unchanged');
   // Positive control: git without the app's settings fetches the missing blob and adds a pack.
-  execFileSync('git', ['-C', clone, 'diff-tree', '-r', '--numstat', `${head}~1`, head], {env});
+  caseGit(['-C', clone, 'diff-tree', '-r', '--numstat', `${head}~1`, head]);
   assert.ok(packs() > before.packs, 'plain git lazily fetches the missing blob into a new pack');
 });
 
@@ -446,4 +445,53 @@ test('missing-object-ordinary: in an ordinary repository with a missing file obj
   rmSync(path.join(box.folder, '.git/objects', blob.slice(0, 2), blob.slice(2)));
   const listed = await changedFiles(await open(box.folder), source(head));
   assert.equal(!listed.ok && listed.error.kind, 'gitFailed', `a damaged repository shows git's error: ${JSON.stringify(listed)}`);
+});
+
+test('shallow-clone: the oldest commit of a shallow clone has no parent, so every file shows as added', async () => {
+  const box = sandbox('shallow-source');
+  box.write('a.txt', 'a\n');
+  box.write('b.txt', 'b\n');
+  box.commit('Start');
+  box.write('a.txt', 'a changed\n');
+  const head = box.commit('Edit a');
+  const clone = path.join(scratch, 'shallow');
+  caseGit(['clone', '--quiet', '--depth', '1', `file://${box.folder}`, clone]);
+  const repo = await open(clone);
+  const page = value(await commitPage(repo, 0));
+  assert.deepEqual(page.commits.map(commit => [commit.hash, commit.parents.length]), [[head, 0]]);
+  assert.deepEqual(value(await changedFiles(repo, source(head))).map(file => [file.path, file.status]), [['a.txt', 'added'], ['b.txt', 'added']]);
+});
+
+test('non-utf8-name: a file name that is not valid UTF-8 lists with the replacement character and answers unknownFile', async () => {
+  const box = sandbox('latin1-name');
+  // macOS refuses such a name on disk, so only the commit's tree holds it.
+  caseGit(['-C', box.folder, 'fast-import', '--quiet'], {input: Buffer.concat([
+    Buffer.from('commit refs/heads/main\ncommitter Case <case@example.invalid> 1767225600 +0000\ndata 5\nFirst\nM 100644 inline caf'),
+    Buffer.from([0xe9]),
+    Buffer.from('.txt\ndata 2\nx\n\n'),
+  ])});
+  const head = box.git('rev-parse', 'refs/heads/main') as CommitHash;
+  const repo = await open(box.folder);
+  const [listed] = value(await changedFiles(repo, source(head)));
+  assert.equal(listed.path, 'caf\uFFFD.txt');
+  const answer = await fileDiff(repo, source(head), listed.path, false);
+  assert.equal(!answer.ok && answer.error.kind, 'unknownFile');
+});
+
+test('unreadable-index: a commit\'s file list and diff fail with git\'s line while .git/index is unreadable, because git diff-tree reads the index', async () => {
+  const box = sandbox('unreadable-index');
+  box.write('a.txt', 'a\n');
+  box.commit('Start');
+  box.write('a.txt', 'b\n');
+  const head = box.commit('Edit a');
+  const repo = await open(box.folder);
+  const index = path.join(box.folder, '.git/index');
+  chmodSync(index, 0);
+  try {
+    for (const answer of [await changedFiles(repo, source(head)), await fileDiff(repo, source(head), 'a.txt' as FilePath, false)]) {
+      assert.equal(!answer.ok && answer.error.kind, 'gitFailed');
+      assert.match(!answer.ok && answer.error.kind === 'gitFailed' ? answer.error.message : '', /index file open failed/);
+    }
+  } finally { chmodSync(index, 0o644); }
+  assert.equal(value(await changedFiles(repo, source(head))).length, 1, 'the list works again once the index is readable');
 });

@@ -1,6 +1,3 @@
-# Purpose: Excludes private, generated, and machine-local files from Git.
-# Scope: Applies to repository working-tree discovery.
-
 # Private drafts and local working material
 .local/
 /PLAN.md
@@ -22,29 +19,13 @@ Thumbs.db
 !.env.example
 !.env.schema
 !.env.template
-.venv/
-venv/
 .secrets/
-
-# Python output
-__pycache__/
-*.py[cod]
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.tox/
-.nox/
 
 # Installed packages
 node_modules/
 
 # Reports and build output
 *.log
-.coverage
-.coverage.*
-coverage.xml
-htmlcov/
 reports/
 test-results/
 dist/

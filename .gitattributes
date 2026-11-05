@@ -1,4 +1,1 @@
-# Purpose: Normalizes text line endings in Git.
-# Scope: Applies to files added to this repository.
-
 * text=auto eol=lf

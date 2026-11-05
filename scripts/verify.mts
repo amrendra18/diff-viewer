@@ -20,7 +20,8 @@ import {
 import type {Fixtures} from './fixtures.mts';
 import {fingerprint} from './fingerprint.mts';
 import {isAlive, sampleOwnedDescendants} from './owned-processes.mts';
-import {BUNDLE, BUNDLE_EXECUTABLE, packageApp} from './package.mts';
+import {BUNDLE, BUNDLE_EXECUTABLE, checkoutIdentity, packageApp} from './package.mts';
+import {isolatedGit, isolatedGitOut, personalGitOut, realGit} from './isolated-git.mts';
 import {frontAppName, journeyFailure, screenCheck} from './screen.mts';
 
 declare global {
@@ -127,7 +128,7 @@ const actions: {at: string; action: string; result: unknown}[] = [];
 const unexpected: string[] = [];
 const owned = new Set<number>();
 const closing: Promise<void>[] = [];
-const cleanup: {ownedProcesses: number; stillRunning: number[]; stopped: number[]; errors: string[]; evidenceRetained: boolean} = {ownedProcesses: 0, stillRunning: [], stopped: [], errors: [], evidenceRetained: true};
+const cleanup: {ownedProcesses: number; stillRunning: number[]; stopped: number[]; errors: string[]} = {ownedProcesses: 0, stillRunning: [], stopped: [], errors: []};
 let fixtures: Fixtures;
 
 function log(action: string, result: unknown): void { actions.push({at: new Date().toISOString(), action, result}); }
@@ -154,17 +155,24 @@ async function calm(label: string): Promise<void> {
   loadBeforeMeasuring[label] = {load: round(loadavg()[0]), waitedSeconds: waited};
 }
 
+function nodeInRange(version: string, range: string): boolean {
+  const match = /^>=(\d+\.\d+\.\d+) <(\d+)$/.exec(range);
+  if (!match) throw new Error(`package.json engines.node must have the form ">=A.B.C <D", not "${range}".`);
+  const [, least, below] = match;
+  return version.localeCompare(least, 'en', {numeric: true}) >= 0 && Number(version.split('.')[0]) < Number(below);
+}
+
 function doctor(): {ready: boolean; rows: {name: string; ok: boolean; detail: string}[]} {
   const checks: {name: string; ok: boolean; detail: string}[] = [];
   const check = (name: string, ok: boolean, detail: string) => checks.push({name, ok, detail});
   const screen = screenCheck(frontAppName());
   check('screen', screen.ok, screen.detail);
   check('platform', process.platform === 'darwin' && process.arch === 'arm64', `${process.platform}/${process.arch}; the app targets macOS on Apple silicon.`);
-  check('Node', process.versions.node.startsWith('24.'), process.versions.node);
-  const git = spawnSync('git', ['--version'], {encoding: 'utf8'});
+  const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as {engines: {node: string}; dependencies: Record<string, string>; devDependencies: Record<string, string>};
+  check('Node', nodeInRange(process.versions.node, pkg.engines.node), `${process.versions.node}; package.json needs ${pkg.engines.node}.`);
+  const git = harnessGit(['--version']);
   check('git', git.status === 0, git.status === 0 ? git.stdout.trim() : 'Install git.');
-  const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as {devDependencies: Record<string, string>};
-  for (const [name, version] of Object.entries(pkg.devDependencies)) {
+  for (const [name, version] of Object.entries({...pkg.dependencies, ...pkg.devDependencies})) {
     const file = path.join(root, 'node_modules', name, 'package.json');
     const installed = existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as {version: string}).version : 'missing';
     check(name, installed === version, `${installed}; package.json pins ${version}. Run npm ci --ignore-scripts.`);
@@ -182,30 +190,19 @@ function doctor(): {ready: boolean; rows: {name: string; ok: boolean; detail: st
   return {ready: checks.every(row => row.ok), rows: checks};
 }
 
-/**
- * The only variables the app, scripts/start, and the harness's git get from the shell that started the run: where git is, and the home
- * folder its user config comes from, so the app and the harness read the same git. Electron and git start fine
- * without the rest. A trace records the launch environment, so nothing else (tokens, sockets, session ids) is passed.
- */
 const ALLOWED_ENV = ['PATH', 'HOME'];
 const allowedEnv = (extra: Record<string, string> = {}): Record<string, string> => ({
   ...Object.fromEntries(ALLOWED_ENV.flatMap(name => process.env[name] === undefined ? [] : [[name, process.env[name]]])), ...extra,
 });
-/** The planted fault `env` launches the app with the whole inherited environment, as the harness did before, so the trace scan must fail. */
 const appEnv = (extra: Record<string, string> = {}): Record<string, string> => fault === 'env'
   ? {...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE')), ...extra}
   : allowedEnv(extra);
 
-/**
- * Git reads for the harness: no optional locks, so it never refreshes the index of a repository it inspects.
- * It keeps HOME, so the user's global git config applies: use it only for reads. Fixture writes go through
- * fixtures.mts, and changes standing in for the user's own git go through outsideGit.
- */
-function gitOut(folder: string, ...args: string[]): string {
-  const result = spawnSync('git', ['-C', folder, ...args], {encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: allowedEnv({GIT_OPTIONAL_LOCKS: '0'})});
-  if (result.status !== 0) throw new Error(`git ${args.join(' ')} in ${folder} exited ${result.status ?? 'none'}: ${result.stderr.trim()}`);
-  return result.stdout.trim();
-}
+const harnessGit = (args: readonly string[], {env, input}: {env?: Record<string, string>; input?: string} = {}) => isolatedGit(args, {base: allowedEnv(), env, input});
+
+const gitOut = (folder: string, ...args: string[]): string => isolatedGitOut(['-C', folder, ...args], {base: allowedEnv(), env: {GIT_OPTIONAL_LOCKS: '0'}}).trim();
+
+const gitAsTheAppReads = (folder: string, ...args: string[]): string => personalGitOut(['-C', folder, ...args], {base: allowedEnv()}).trim();
 
 type Launched = {app: ElectronApplication; page: Page; startedAt: number};
 type SeenRequest = {url: string; error: string | null};
@@ -678,14 +675,14 @@ function largestHighlightedFile(repository: string): {file: string; lines: numbe
     return {file: line.slice('HEAD:'.length, at), lines: Number(line.slice(at + 1))};
   });
   // The app hides a file over LARGE_FILE_BYTES too, so bar 3 measures only files under both limits.
-  const sizes = spawnSync('git', ['-C', repository, 'cat-file', '--batch-check=%(objectsize)'], {input: counted.map(entry => `HEAD:${entry.file}`).join('\n') + '\n', encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: allowedEnv({GIT_OPTIONAL_LOCKS: '0'})});
+  const sizes = harnessGit(['-C', repository, 'cat-file', '--batch-check=%(objectsize)'], {input: counted.map(entry => `HEAD:${entry.file}`).join('\n') + '\n', env: {GIT_OPTIONAL_LOCKS: '0'}});
   assert.equal(sizes.status, 0, `git cat-file --batch-check in ${repository}: ${sizes.stderr}`);
   const bytes = sizes.stdout.trim().split('\n').map(Number);
   const candidates = counted.filter((entry, index) => entry.lines < LARGE_FILE_LINES && bytes[index] < LARGE_FILE_BYTES && languageFor(entry.file) !== 'text').sort((a, b) => b.lines - a.lines || a.file.localeCompare(b.file));
   // The app hides a file when either version is too large, so the version before the measured commit must fit too.
   for (const entry of candidates) {
     const commit = gitOut(repository, 'log', '-1', '--no-merges', '--format=%H', 'HEAD', '--', entry.file);
-    const before = spawnSync('git', ['-C', repository, 'cat-file', '--batch-check=%(objectsize)'], {input: `${commit}^:${entry.file}\n`, encoding: 'utf8', env: allowedEnv({GIT_OPTIONAL_LOCKS: '0'})});
+    const before = harnessGit(['-C', repository, 'cat-file', '--batch-check=%(objectsize)'], {input: `${commit}^:${entry.file}\n`, env: {GIT_OPTIONAL_LOCKS: '0'}});
     const size = Number(before.stdout.trim());
     if (before.status === 0 && (Number.isNaN(size) || size < LARGE_FILE_BYTES)) return {...entry, commit};
   }
@@ -1237,8 +1234,7 @@ async function refocus(app: ElectronApplication, page: Page, label: string): Pro
 
 /** Git run by the harness, standing in for the user's own git, to change a fixture copy from outside the app. */
 function outsideGit(folder: string, ...args: string[]): void {
-  const result = spawnSync('git', ['-C', folder, '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], {encoding: 'utf8', env: allowedEnv({GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1'})});
-  if (result.status !== 0) throw new Error(`git ${args.join(' ')} in ${folder} exited ${result.status ?? 'none'}: ${result.stderr.trim()}`);
+  isolatedGitOut(['-C', folder, ...args], {base: allowedEnv()});
 }
 
 function editLines(file: string, edit: (lines: string[]) => string[]): void {
@@ -1256,7 +1252,7 @@ const listedPaths = async (page: Page) => (await page.locator('#files .file').ev
 
 /** Git's own staged and unstaged path lists, read the way AGENTS.md rule 2 allows, for comparison with the app's tabs. */
 function gitWorkingPaths(repository: string): {staged: string[]; unstaged: string[]} {
-  const fields = gitOut(repository, 'diff-index', '--cached', '-M', '--ita-invisible-in-index', '--name-status', '-z', 'HEAD').split('\0').filter(Boolean);
+  const fields = gitAsTheAppReads(repository, 'diff-index', '--cached', '-M', '--ita-invisible-in-index', '--name-status', '-z', 'HEAD').split('\0').filter(Boolean);
   const staged: string[] = [];
   for (let index = 0; index < fields.length;) {
     const letter = fields[index++][0];
@@ -1264,8 +1260,8 @@ function gitWorkingPaths(repository: string): {staged: string[]; unstaged: strin
     const file = fields[index++];
     if (letter !== 'U') staged.push(file);
   }
-  const tracked = gitOut(repository, 'diff-files', '--numstat', '-z').split('\0').filter(Boolean).map(record => record.split('\t').slice(2).join('\t'));
-  const untracked = gitOut(repository, 'ls-files', '--others', '--exclude-standard', '-z').split('\0').filter(Boolean).map(file => file.replace(/\/$/, ''));
+  const tracked = gitAsTheAppReads(repository, 'diff-files', '--numstat', '-z').split('\0').filter(Boolean).map(record => record.split('\t').slice(2).join('\t'));
+  const untracked = gitAsTheAppReads(repository, 'ls-files', '--others', '--exclude-standard', '-z').split('\0').filter(Boolean).map(file => file.replace(/\/$/, ''));
   return {staged: staged.sort(), unstaged: [...new Set([...tracked, ...untracked])].sort()};
 }
 
@@ -1440,7 +1436,7 @@ async function workingChanges(): Promise<void> {
       chmodSync(index, 0);
       await page.locator('#refresh').click();
       await page.waitForFunction(() => document.getElementById('staged-count')?.textContent === '?' && document.getElementById('unstaged-count')?.textContent === '?'
-        && !document.getElementById('diff')!.hasAttribute('aria-busy'), null, {timeout: 30000});
+        && !document.getElementById('diff')!.hasAttribute('aria-busy') && !document.getElementById('refresh')!.hasAttribute('aria-busy'), null, {timeout: 30000});
       const during = await diffShown();
       chmodSync(index, indexMode);
       writeFileSync(path.join(repository, `after-error-${++untracked}.txt`), 'Written after the failed refresh.\n');
@@ -1457,8 +1453,8 @@ async function workingChanges(): Promise<void> {
     await openFile(page, 'src/app.ts');
     const commitRows = await changeRows(page);
     assert(commitRows.length > 0, 'the newest commit\'s src/app.ts has change rows');
-    // While the index is unreadable, the open file's own request may fail too; the cause is not confirmed, so only the recovery is checked.
-    const {after: recoveredCommit} = await failThenRecover();
+    const {during: commitDuring, after: recoveredCommit} = await failThenRecover();
+    assert.equal(commitDuring.notice, 'Git could not read this repository', 'on the Commits tab with a commit open, Refresh shows git\'s error while .git/index is unreadable, because git diff-tree reads the index');
     assert.deepEqual(recoveredCommit, {notice: null, file: 'src/app.ts', rows: commitRows},
       'on the Commits tab with a commit open, a Refresh after .git/index is readable again shows the open file\'s diff and no error notice');
     await shot(page, 'working-changes-commit-recovered');
@@ -1520,8 +1516,7 @@ async function repositoryRemoved(): Promise<void> {
 
 /** Writes a `git` on PATH that appends each argument list to `log` and runs the real git. */
 function gitRecorder(folder: string): {dir: string; log: string} {
-  const real = spawnSync('/bin/sh', ['-c', 'command -v git'], {encoding: 'utf8'}).stdout.trim();
-  assert(real.startsWith('/'), 'the harness found git on PATH');
+  const real = realGit();
   mkdirSync(folder, {recursive: true});
   const log = path.join(folder, 'calls.bin');
   writeFileSync(path.join(folder, 'git'), `#!/bin/sh\nprintf '%s\\0' "$#" "$@" >> '${log}'\nexec '${real}' "$@"\n`, {mode: 0o755});
@@ -1616,7 +1611,7 @@ async function readOnlyRepository(): Promise<void> {
   const after = fingerprint(repository);
   const controlBefore = fingerprint(control);
   const statusCommand = [...GIT_SETTINGS.flatMap(setting => ['-c', setting]), ...GIT_OPTIONS, '-C', control, 'status', ...STATUS_ARGUMENTS];
-  const status = spawnSync('git', statusCommand, {encoding: 'utf8', env: allowedEnv()});
+  const status = harnessGit(statusCommand);
   const controlAfter = fingerprint(control);
   const external = requests.filter(request => !request.url.startsWith(`${APP_ORIGIN}/`));
   const commands = recordedCommands(recorder.log);
@@ -1666,9 +1661,6 @@ async function readOnlyWithFault(): Promise<void> {
   finally { writeFileSync(file, original); }
 }
 
-// GIT_SETTINGS (src/app/git-settings.ts) pins log.showSignature, i18n.logOutputEncoding, diff.renameLimit, status.renames,
-// status.renameLimit, and color.ui. log.decorate, diff.suppressBlankEmpty, diff.noprefix, and core.abbrev are not pinned;
-// the app's fixed output formats do not use them. This check expects every value below to leave the app's view unchanged.
 const USER_GIT_CONFIG = [
   '[log]', '\tshowSignature = true', '\tdecorate = full',
   '[i18n]', '\tlogOutputEncoding = ISO-8859-1',
@@ -1712,9 +1704,9 @@ async function launcherOpen(): Promise<void> {
   mkdirSync(outside);
   const clone = path.join(evidence, 'linked-source');
   const linked = path.join(evidence, 'linked-worktree');
-  const cloned = spawnSync('git', ['clone', '-q', '--no-local', fixtures.practice, clone], {encoding: 'utf8', env: allowedEnv({GIT_OPTIONAL_LOCKS: '0'})});
+  const cloned = harnessGit(['clone', '-q', '--no-local', fixtures.practice, clone]);
   assert.equal(cloned.status, 0, `clone fixture: ${cloned.stderr}`);
-  const added = spawnSync('git', ['-C', clone, 'worktree', 'add', '-q', '--detach', linked, 'HEAD'], {encoding: 'utf8', env: allowedEnv({GIT_OPTIONAL_LOCKS: '0'})});
+  const added = harnessGit(['-C', clone, 'worktree', 'add', '-q', '--detach', linked, 'HEAD']);
   assert.equal(added.status, 0, `create linked worktree: ${added.stderr}`);
   const before = new Map([[fixtures.practice, fingerprint(fixtures.practice)], [clone, fingerprint(clone)], [linked, fingerprint(linked)], [fixtures.bare, fingerprint(fixtures.bare)]]);
   const samples: number[] = [];
@@ -1956,13 +1948,12 @@ async function appBundle(): Promise<void> {
 }
 
 const TRACE_SCAN = 'traces hold no shell environment';
-/** Names that must never sit in a trace, whatever the allowlist says. */
-const SECRET_NAMES = ['CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_CODE_SESSION_ID', 'SSH_AUTH_SOCK', 'TERM_SESSION_ID'];
+const SECRET_NAME = /_(?:TOKEN|SECRET|PASSWORD|KEY|SESSION_ID|SOCK)$/;
 // Shorter values (1, true, zsh, a user name) also occur in ordinary trace text, so only longer ones are searched for.
 const MIN_SEARCHED_VALUE = 8;
 
 /**
- * Unzips each traces/*.zip of this run and searches it for SECRET_NAMES and for the value of every variable of the starting shell outside the
+ * Unzips each traces/*.zip of this run and searches it for the names that match SECRET_NAME and for the value of every variable of the starting shell outside the
  * allowlist. Values the harness writes itself are not searched for: the checkout's path and its parents (PWD), and text inside
  * an allowed value (a PATH entry). The result names variables only, never a value.
  */
@@ -1979,7 +1970,7 @@ function environmentInTraces(): {allowed: string[]; traces: string[]; valuesSear
     const unzipped = spawnSync('unzip', ['-p', path.join(evidence, 'traces', trace)], {maxBuffer: 1 << 30});
     if (unzipped.status !== 0) throw new Error(`unzip -p traces/${trace} exited ${unzipped.status ?? 'none'}`);
     const names = [
-      ...SECRET_NAMES.filter(name => unzipped.stdout.includes(name)),
+      ...Object.keys(process.env).filter(name => SECRET_NAME.test(name) && unzipped.stdout.includes(name)),
       ...searched.filter(([, value]) => unzipped.stdout.includes(value) || unzipped.stdout.includes(JSON.stringify(value).slice(1, -1))).map(([name]) => name),
     ];
     if (names.length) found[trace] = [...new Set(names)].sort();
@@ -2050,14 +2041,14 @@ async function stopOwnedProcesses(): Promise<void> {
  * followed, and an untracked folder (a nested repository) by its name only, so the harness reads no ignored file.
  */
 function checkoutState(): {revision: string; modified: boolean; changesDigest: string} {
-  const changes = gitOut(root, 'diff-index', '--binary', '-p', 'HEAD', '--');
-  const untracked = gitOut(root, 'ls-files', '-o', '--exclude-standard', '-z').split('\0').filter(Boolean).sort().map(file => {
+  const changes = gitAsTheAppReads(root, 'diff-index', '--binary', '-p', 'HEAD', '--');
+  const untracked = gitAsTheAppReads(root, 'ls-files', '-o', '--exclude-standard', '-z').split('\0').filter(Boolean).sort().map(file => {
     const full = path.join(root, file);
     const entry = lstatSync(full);
     const content = entry.isSymbolicLink() ? `link:${readlinkSync(full)}` : entry.isFile() ? readFileSync(full) : 'folder';
     return `${file}\0${createHash('sha256').update(content).digest('hex')}`;
   });
-  return {revision: gitOut(root, 'rev-parse', 'HEAD'), modified: gitOut(root, 'status', '--porcelain').length > 0, changesDigest: createHash('sha256').update(changes).update('\0').update(untracked.join('\n')).digest('hex')};
+  return {...checkoutIdentity(root, allowedEnv()), changesDigest: createHash('sha256').update(changes).update('\0').update(untracked.join('\n')).digest('hex')};
 }
 const checkout = checkoutState();
 

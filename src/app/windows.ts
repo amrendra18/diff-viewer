@@ -14,6 +14,6 @@ export function planOpen(shown: ReadonlyMap<number, RepoPath | null>, caller: nu
   for (const [window, repository] of shown) {
     if (repository === path) return window === caller ? { kind: 'here' } : { kind: 'focus', window };
   }
-  // `== null` on purpose: it also matches undefined, a caller with no window in `shown`.
-  return shown.get(caller) == null ? { kind: 'here' } : { kind: 'new' };
+  const callerShows = shown.get(caller) ?? null;
+  return callerShows === null ? { kind: 'here' } : { kind: 'new' };
 }

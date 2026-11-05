@@ -1,17 +1,18 @@
 import {after} from 'node:test';
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
-import {existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
+import {isolatedGitOut, realGit} from '../scripts/isolated-git.mts';
+import type {IsolatedGitOptions} from '../scripts/isolated-git.mts';
 import type {CommitHash, DiffRow, Line, Result} from '../src/domain/types.ts';
 
-/** Git for building test repositories: no user settings, fixed author and time. The app's own git calls do not use it. */
-export const env = {
-  ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_'))),
-  GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+const FIXED_AUTHOR = {
   GIT_AUTHOR_NAME: 'Case', GIT_AUTHOR_EMAIL: 'case@example.invalid', GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z',
   GIT_COMMITTER_NAME: 'Case', GIT_COMMITTER_EMAIL: 'case@example.invalid', GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z',
 };
+
+/** Git for building test repositories: no user settings, fixed author and time. The app's own git calls do not use it. */
+export const caseGit = (args: readonly string[], {env, ...options}: IsolatedGitOptions = {}) => isolatedGitOut(args, {...options, env: {...FIXED_AUTHOR, ...env}});
 
 /** A scratch folder under /private/tmp, removed after the test file, and fresh repositories inside it. */
 export function scratchFolder(label: string) {
@@ -20,8 +21,10 @@ export function scratchFolder(label: string) {
   function sandbox(name: string) {
     const folder = path.join(scratch, name);
     mkdirSync(folder);
-    const git = (...args: string[]) => execFileSync('git', ['-C', folder, '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], {encoding: 'utf8', env}).trim();
+    const git = (...args: string[]) => caseGit(['-C', folder, ...args]).trim();
     git('init', '--quiet', '-b', 'main');
+    // The app reads the person's config by design, so each test repository sets the values a test's result depends on.
+    for (const [name, setting] of [['core.autocrlf', 'false'], ['core.excludesFile', '/dev/null'], ['core.attributesFile', '/dev/null']]) git('config', name, setting);
     return {
       folder, git,
       write(file: string, content: string | Buffer) { mkdirSync(path.dirname(path.join(folder, file)), {recursive: true}); writeFileSync(path.join(folder, file), content); },
@@ -37,9 +40,9 @@ export function scratchFolder(label: string) {
  */
 export function partialClone(scratch: string, source: string, name: string): string {
   const bare = path.join(scratch, `${name}.git`), clone = path.join(scratch, name);
-  execFileSync('git', ['clone', '--quiet', '--bare', source, bare], {env});
-  execFileSync('git', ['-C', bare, 'config', 'uploadpack.allowFilter', 'true'], {env});
-  execFileSync('git', ['clone', '--quiet', '--filter=blob:none', `file://${bare}`, clone], {env});
+  caseGit(['clone', '--quiet', '--bare', source, bare]);
+  caseGit(['-C', bare, 'config', 'uploadpack.allowFilter', 'true']);
+  caseGit(['clone', '--quiet', '--filter=blob:none', `file://${bare}`, clone]);
   return clone;
 }
 
@@ -48,8 +51,8 @@ export function partialClone(scratch: string, source: string, name: string): str
  * name HEAD still resolves to a hash, but git cannot read that commit. Returns the hash.
  */
 export function withoutHeadObject(repository: string): string {
-  const hash = execFileSync('git', ['-C', repository, 'rev-parse', 'HEAD'], {encoding: 'utf8', env}).trim();
-  const objects = execFileSync('git', ['-C', repository, 'rev-parse', '--git-path', 'objects'], {encoding: 'utf8', env}).trim();
+  const hash = caseGit(['-C', repository, 'rev-parse', 'HEAD']).trim();
+  const objects = caseGit(['-C', repository, 'rev-parse', '--git-path', 'objects']).trim();
   renameSync(path.resolve(repository, objects, hash.slice(0, 2), hash.slice(2)), path.resolve(repository, objects, `moved-${hash}`));
   return hash;
 }
@@ -72,8 +75,7 @@ export function shape(rows: readonly DiffRow[]): string[] {
  * With `script`, the stand-in is that shell script instead, given the real git's path; it logs nothing.
  */
 export async function withGitOnPath<T>(scratch: string, work: () => Promise<T>, {git = true, script}: {git?: boolean; script?: (real: string) => string} = {}): Promise<{result: T; calls: string[]}> {
-  const real = (process.env.PATH ?? '').split(':').map(folder => path.join(folder, 'git')).find(file => existsSync(file));
-  if (!real) assert.fail('git is not on PATH');
+  const real = realGit();
   const folder = mkdtempSync(path.join(scratch, 'path-'));
   const log = path.join(folder, 'calls.log');
   writeFileSync(log, '');
