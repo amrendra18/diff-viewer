@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/knip/schema.json",
+  "entry": [
+    "src/app/preload.ts",
+    "src/app/highlight-worker.ts",
+    "src/web/renderer.ts",
+    "tests/**/*.test.mts",
+    "scripts/{check,fixtures,hand-journey,package,start,verify}.mts"
+  ],
+  "project": ["src/**/*.ts", "src/app/highlight-client.mts", "tests/**/*.mts", "scripts/**/*.mts", "*.mjs"],
+  "ignoreDependencies": ["jscpd"],
+  "ignoreBinaries": ["lsappinfo"]
+}

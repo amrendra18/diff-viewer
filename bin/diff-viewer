@@ -1,0 +1,199 @@
+#!/usr/bin/env node
+import {spawn, execFileSync} from 'node:child_process';
+import {randomUUID} from 'node:crypto';
+import {existsSync, mkdirSync, readFileSync, realpathSync, rmSync} from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {parseSourceArgument} from '../src/domain/source-argument.mjs';
+
+const root = path.dirname(path.dirname(realpathSync(process.argv[1])));
+const bundle = path.join(root, '.local/build/diff-viewer.app/Contents/MacOS/diff-viewer');
+const openFlags = '--source unstaged|staged|commit:REV, --format json';
+const help = [
+  'diff-viewer shows local Git changes side by side.',
+  'Usage: diff-viewer open PATH [--source unstaged|staged|commit:REV] [--format json]',
+  '       diff-viewer help [--format json|markdown]',
+  '       diff-viewer --help | open --help [--format json]',
+  '       diff-viewer --version [--format json]',
+  'Inputs: PATH is an existing local Git repository. PATH may be relative, such as . for the current folder. DIFF_VIEWER_STATE_DIR chooses the app data folder.',
+  'Outputs: repository, app (started|running), pid, title, visible, and source and firstFile when --source is given. JSON mode prints one object; an error prints {error: {code, message, next}}, where next holds one step.',
+  'Before running: install Node 24, Git, and build .local/build/diff-viewer.app with scripts/package.',
+  'Effects: reads, writes own state, window, process',
+  'Writes: <state>/recent.json, <state>/chromium, and Electron app data. The app keeps running after open returns. It stops on Command-Q or when its last window closes.',
+  'Version: --version names the app built in .local/build. An app that is already running keeps its own build until Command-Q.',
+  'Exit codes: 0 opened; 1 could not open; 2 bad call.',
+  'Error codes, exit 2: bad-call, unknown-verb, unknown-flag, bad-format, bad-source, bad-state-dir.',
+  'Error codes, exit 1: git-missing, git-failed, not-a-repository, unknown-commit, unavailable-source, missing-app, state-unavailable, app-not-ready, damaged-build (--version only).',
+  'help inputs: --format json|markdown. Outputs: this help. Before running: none.',
+  'Effects: reads',
+  'help exit codes: 0 shown; 2 bad call.',
+].join('\n');
+const helpHelp = [
+  'diff-viewer shows local Git changes side by side.',
+  'Usage: diff-viewer help [--format json|markdown]',
+  'Inputs: --format json|markdown. Outputs: help text or one JSON object.',
+  'Before running: none.',
+  'Effects: reads',
+  'Exit codes: 0 shown; 2 bad call.',
+].join('\n');
+const helpJson = JSON.stringify({verbs: ['help', 'open'], help});
+const runHelp = 'run diff-viewer --help';
+const runPackage = `run scripts/package in ${root}`;
+/** The one next step each error code gives, in JSON `next` and on the text `next:` line. */
+const nextStep = {
+  'bad-call': runHelp, 'unknown-verb': runHelp, 'unknown-flag': runHelp, 'bad-format': runHelp,
+  'bad-source': 'use --source unstaged, staged, or commit:REV',
+  'bad-state-dir': 'set DIFF_VIEWER_STATE_DIR to an absolute folder path, or unset it',
+  'git-missing': 'install git, add it to PATH, and run the same command again',
+  'git-failed': 'fix the problem named in git\'s message, then run the same command again',
+  'not-a-repository': 'pass the path of a folder inside a Git repository',
+  'unknown-commit': 'pass a commit that exists in the repository, for example commit:HEAD',
+  'unavailable-source': 'use --source commit:REV for a bare repository',
+  'missing-app': runPackage,
+  'state-unavailable': 'set DIFF_VIEWER_STATE_DIR to a writable absolute folder path',
+  'app-not-ready': 'run the same command again; if it fails again, quit diff-viewer with Command-Q and retry',
+  'damaged-build': runPackage,
+};
+/** The codes the app may write in a ready file with ready false. */
+const APP_FAILURES = ['not-a-repository', 'git-failed', 'unknown-commit', 'unavailable-source', 'app-not-ready'];
+const args = process.argv.slice(2);
+const json = args.includes('--format') && args[args.indexOf('--format') + 1] === 'json';
+function fail(code, message, status) {
+  const next = nextStep[code];
+  if (json) console.log(JSON.stringify({error: {code, message, next: [next]}}));
+  else console.error(`${message}\nnext: ${next}`);
+  process.exit(status);
+}
+const helpCall = args[0] === 'open' ? args.slice(1) : args;
+if (helpCall[0] === '--help' && (helpCall.length === 1 || helpCall.length === 3 && json)) {
+  console.log(json ? helpJson : help);
+  process.exit(0);
+}
+if (args[0] === 'help') {
+  if (args.length === 1) console.log(help);
+  else if (args.length === 2 && args[1] === '--help') console.log(helpHelp);
+  else if (args.length === 3 && args[1] === '--format' && args[2] === 'json') console.log(helpJson);
+  else if (args.length === 3 && args[1] === '--format' && args[2] === 'markdown') console.log('# diff-viewer\n\n' + help);
+  else fail('unknown-flag', 'Valid flags: --help, --format json|markdown.', 2);
+  process.exit(0);
+}
+if (args[0] === '--version') {
+  if (args.length !== 1 && !(args.length === 3 && args[1] === '--format' && args[2] === 'json')) fail('bad-call', 'Valid flags: --format json.', 2);
+  const identityFile = path.join(root, '.local/build/diff-viewer.app/Contents/Resources/build-identity.json');
+  let identity;
+  if (existsSync(identityFile)) {
+    try {
+      identity = JSON.parse(readFileSync(identityFile, 'utf8'));
+      if (typeof identity.version !== 'string' || identity.version.length === 0 || typeof identity.revision !== 'string' || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(identity.revision) || typeof identity.modified !== 'boolean') throw new Error('invalid identity');
+    } catch { fail('damaged-build', 'The packaged build identity is damaged.', 1); }
+  } else {
+    identity = {version: JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version, revision: 'unknown', modified: null};
+  }
+  console.log(json ? JSON.stringify(identity) : `diff-viewer ${identity.version} (${identity.revision}${identity.modified ? ', modified' : ''})`);
+  process.exit(0);
+}
+if (args[0] !== 'open') fail('unknown-verb', `${args.length === 0 ? 'Missing verb' : `Unknown verb ${args[0]}`}. Valid verbs: open, help. Valid flags: --help, --version.`, 2);
+const remaining = args.slice(1);
+const sourceAt = remaining.indexOf('--source');
+let source = null;
+if (sourceAt >= 0) {
+  source = parseSourceArgument(remaining[sourceAt + 1]);
+  if (source === null) fail('bad-source', 'Valid --source values: unstaged, staged, commit:REV.', 2);
+  remaining.splice(sourceAt, 2);
+}
+const formatAt = remaining.indexOf('--format');
+if (formatAt >= 0) {
+  if (remaining[formatAt + 1] !== 'json') fail('bad-format', 'Valid flags: --format json.', 2);
+  remaining.splice(formatAt, 2);
+}
+if (remaining.some(arg => arg.startsWith('-'))) fail('unknown-flag', `Unknown flag ${remaining.find(arg => arg.startsWith('-'))}. Valid flags: ${openFlags}.`, 2);
+if (remaining.length !== 1) fail('bad-call', 'open needs one repository path. Valid flags: ' + openFlags + '.', 2);
+/** Git's first non-empty line from a failed git call. */
+const firstLine = error => String(error?.stderr ?? '').split('\n').find(line => line.trim().length > 0)?.trim() || 'no message';
+let repository;
+let bare;
+// The source as the app names it: {kind: 'unstaged'}, {kind: 'staged'}, or {kind: 'commit', hash}. Set once the commit resolves.
+let resolvedSource = null;
+let gitOptions;
+// Messages name the resolved absolute path, so `open .` says which folder was checked.
+const target = path.resolve(remaining[0]);
+try {
+  const cleanGitEnvironment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
+  gitOptions = {
+    // LC_ALL=C keeps git's messages in English, so the "not a git repository" check below holds in every locale.
+    // As in the app (src/app/git-settings.ts), git never fetches a missing object in a partial clone.
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: {...cleanGitEnvironment, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: 'none', LC_ALL: 'C'},
+  };
+  bare = execFileSync('git', ['-C', target, 'rev-parse', '--is-bare-repository'], gitOptions).replace(/\r?\n$/, '') === 'true';
+  // The same question the app asks in openRepository, so both name the same folder.
+  repository = execFileSync('git', ['-C', target, 'rev-parse', bare ? '--absolute-git-dir' : '--show-toplevel'], gitOptions).replace(/\r?\n$/, '');
+  repository = realpathSync(repository);
+} catch (error) {
+  // A spawn error (git not found) has code ENOENT; git's own failure has an exit status instead.
+  if (error?.code === 'ENOENT') fail('git-missing', 'git was not found on PATH.', 1);
+  // Only git's own answer, or a folder that does not exist (git says "cannot change to"), means no repository.
+  const gitLine = firstLine(error);
+  if (gitLine.startsWith('fatal: not a git repository') || !existsSync(target)) fail('not-a-repository', `No Git repository at ${target}.`, 1);
+  fail('git-failed', `git could not read ${target}: ${gitLine}`, 1);
+}
+/** The full hash git finds for `name`, or null when it finds none. */
+function verified(name) {
+  try {
+    const hash = execFileSync('git', ['-C', repository, 'rev-parse', '--verify', '--quiet', '--end-of-options', name], gitOptions).trim();
+    return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(hash) ? hash : null;
+  } catch { return null; }
+}
+if (source?.kind === 'commit') {
+  const hash = verified(`${source.revision}^{commit}`);
+  if (hash === null) {
+    // Git gives the same answer for an unknown name and for a commit it cannot read, as in the app's resolveRevision.
+    const named = verified(source.revision);
+    // A full hash resolves to itself without a read, so for one the repository does not hold, a failed read means unknown.
+    if (named !== null && named !== source.revision.toLowerCase()) {
+      try { execFileSync('git', ['-C', repository, 'cat-file', '-t', named], gitOptions); }
+      catch (error) { fail('git-failed', `git could not read commit ${source.revision} (${named}) in ${repository}: ${firstLine(error)}`, 1); }
+    }
+    fail('unknown-commit', `No commit named ${source.revision} in ${repository}.`, 1);
+  }
+  resolvedSource = {kind: 'commit', hash};
+} else resolvedSource = source;
+if (bare && source && source.kind !== 'commit') fail('unavailable-source', `A bare repository has no ${source.kind} changes.`, 1);
+const state = process.env.DIFF_VIEWER_STATE_DIR || path.join(os.homedir(), 'Library/Application Support/diff-viewer');
+// A bad call (exit 2) is named before a missing app (exit 1), as the other call errors are.
+if (!path.isAbsolute(state)) fail('bad-state-dir', `DIFF_VIEWER_STATE_DIR is not an absolute folder path: ${state}`, 2);
+if (!existsSync(bundle)) fail('missing-app', `App bundle is missing at ${bundle}.`, 1);
+try { mkdirSync(state, {recursive: true, mode: 0o700}); }
+catch { fail('state-unavailable', `Cannot create app state folder at ${state}.`, 1); }
+const ready = path.join(state, `ready-${randomUUID()}.json`);
+const child = spawn(bundle, ['--open', repository, '--data-dir', state, '--ready-file', ready, ...(resolvedSource ? ['--source', resolvedSource.kind === 'commit' ? `commit:${resolvedSource.hash}` : resolvedSource.kind] : [])], {
+  cwd: root, detached: true, stdio: 'ignore', env: {...process.env, ELECTRON_RUN_AS_NODE: ''},
+});
+let failed = false;
+child.on('exit', code => { if (code !== 0) failed = true; });
+child.on('error', () => { failed = true; });
+const end = Date.now() + 20000;
+while (Date.now() < end) {
+  if (existsSync(ready)) {
+    let signal;
+    try { signal = JSON.parse(readFileSync(ready, 'utf8')); } catch { break; }
+    rmSync(ready, {force: true});
+    // The app reports its own failure with ready false; pass its code and message on, keeping only codes it may send.
+    if (signal.ready === false && APP_FAILURES.includes(signal.error?.code) && typeof signal.error.message === 'string') {
+      child.unref();
+      fail(signal.error.code, signal.error.message, 1);
+    }
+    if (signal.ready !== true || signal.visible !== true || typeof signal.title !== 'string' || !signal.title.endsWith(' · diff-viewer') || !['started', 'running'].includes(signal.app) || !Number.isSafeInteger(signal.pid) || signal.pid <= 0) break;
+    if (resolvedSource && (JSON.stringify(signal.source) !== JSON.stringify(resolvedSource) || !(signal.firstFile === null || typeof signal.firstFile === 'string'))) break;
+    if (signal.app === 'started' && signal.pid !== child.pid) break;
+    child.unref();
+    console.log(json ? JSON.stringify({repository, app: signal.app, pid: signal.pid, title: signal.title, visible: signal.visible, ...(resolvedSource ? {source: resolvedSource, firstFile: signal.firstFile} : {})}) : `Opened ${repository} in diff-viewer.`);
+    process.exit(0);
+  }
+  if (failed) break;
+  await new Promise(resolve => setTimeout(resolve, 50));
+}
+if (child.exitCode === null && child.pid) {
+  try { process.kill(-child.pid, 'SIGKILL'); } catch { /* Process already exited. */ }
+}
+rmSync(ready, {force: true});
+fail('app-not-ready', `The app did not open ${repository} within 20 seconds.`, 1);

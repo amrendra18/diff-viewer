@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+exec node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON "$SCRIPT_DIR/package.mts" "$@"

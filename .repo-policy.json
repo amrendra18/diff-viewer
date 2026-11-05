@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "public_emails": [
+    "noreply@anthropic.com",
+    "4004234+amrendra18@users.noreply.github.com"
+  ],
+  "private_literal_exceptions": [
+    {
+      "path": "LICENSE",
+      "line": 3,
+      "sha256": "f1e65c615b01d1403d547c9857290b6138ba2bd6de900087a39fd61ea2c4a99a",
+      "reason": "The MIT License copyright line names the copyright holder."
+    },
+    {
+      "path": "README.md",
+      "line": 14,
+      "sha256": "412532bd97e1e31deabc27d11ff9b3df4fec4176c08bc5189644d3b182a8215a",
+      "reason": "The clone command names the repository's own GitHub address."
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "line": 35,
+      "sha256": "da407fd82d39489997b3731e1db271dec67f8a4ffa183383b8831fe7c7efe3db",
+      "reason": "The hooks paragraph names the public repository of the first-commit tool."
+    },
+    {
+      "path": ".repo-policy.json",
+      "line": 5,
+      "sha256": "ef085ae24b67ce4972390264f155b10e70ca22ecada9356592618aad322aa13f",
+      "reason": "The public GitHub no-reply email of the commit author."
+    }
+  ]
+}

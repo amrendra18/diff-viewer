@@ -1,0 +1,9 @@
+{
+  "minLines": 5,
+  "minTokens": 50,
+  "mode": "mild",
+  "format": ["typescript", "javascript"],
+  "path": ["src", "scripts", "tests"],
+  "reporters": ["console"],
+  "threshold": 0
+}

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>diff-viewer</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="app-header">
+  <div class="head-left">
+    <div class="brand"><svg viewBox="0 0 20 18" aria-hidden="true"><rect x="1" y="2" width="7" height="2.4" rx="1" class="old"/><rect x="1" y="7.8" width="5" height="2.4" rx="1" class="old"/><rect x="1" y="13.6" width="6" height="2.4" rx="1" class="old"/><rect x="12" y="2" width="7" height="2.4" rx="1" class="new"/><rect x="12" y="7.8" width="7" height="2.4" rx="1" class="new"/><rect x="12" y="13.6" width="4.5" height="2.4" rx="1" class="new"/><rect x="9.6" y="0" width="0.8" height="18" class="rule"/></svg>diff-viewer</div>
+    <span class="divider"></span>
+    <div class="repo">
+      <button class="repo-btn" id="repo-button" aria-haspopup="menu" aria-expanded="false" aria-controls="recent-menu"><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 4.25a1 1 0 0 1 1-1h3.4l1.5 1.6h5.6a1 1 0 0 1 1 1v6.9a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z"/></svg><span id="repo-name"></span><span class="muted" id="no-repo">No repository</span><svg class="i chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.25 8 9.75l3.5-3.5"/></svg></button>
+      <div class="menu" id="recent-menu" role="menu" aria-label="Recent repositories" hidden></div>
+    </div>
+    <span class="branch" id="branch-line" hidden><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="5.5" r="1.5"/><path d="M4.5 5v6M11.5 7c0 2.5-3 2.5-7 4"/></svg><span id="branch"></span></span>
+  </div>
+  <div class="head-right">
+    <button id="open-repo" data-open><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 4.25a1 1 0 0 1 1-1h3.4l1.5 1.6h5.6a1 1 0 0 1 1 1v6.9a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z"/></svg>Open repository…</button>
+    <button id="refresh" data-refresh disabled><svg class="i" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.25 8a5.25 5.25 0 1 1-1.6-3.77"/><path d="M13.4 2.5v3h-3"/></svg>Refresh</button>
+  </div>
+</header>
+<main class="center" id="start"></main>
+<div class="workspace" id="workspace" hidden>
+  <nav class="rail" id="rail" aria-label="Collapsed sidebar" hidden>
+    <button class="side-btn" data-side aria-expanded="false"></button>
+    <span class="chip" id="rail-chip" hidden></span>
+    <button class="rail-info" id="rail-info" data-side><span class="src" id="rail-source"></span><span id="rail-file"></span></button>
+  </nav>
+  <section class="col pane" id="pane" aria-label="Files and sources">
+    <div class="pane-top">
+      <div class="pane-head"><button class="side-btn" data-side aria-expanded="true"></button><span class="sel" id="selection">No commit chosen</span><span id="totals"></span></div>
+      <div class="list scroll" id="files"></div>
+    </div>
+    <div class="pane-split" id="pane-split" role="separator" aria-orientation="horizontal" aria-label="Resize files and sources" aria-valuemin="20" aria-valuemax="80" aria-valuenow="55" tabindex="0" title="Drag to resize. Double-click to reset."></div>
+    <div class="pane-bottom" id="pane-bottom">
+      <div class="tabs" role="tablist" aria-label="Sources">
+        <button class="tab" role="tab" aria-selected="false" id="staged-tab" data-tab="staged"><span class="dot" id="staged-dot"></span>Staged<span class="n" id="staged-count"></span></button>
+        <button class="tab" role="tab" aria-selected="false" id="unstaged-tab" data-tab="unstaged"><span class="dot" id="unstaged-dot"></span>Unstaged<span class="n" id="unstaged-count"></span></button>
+        <button class="tab" role="tab" aria-selected="true" id="commits-tab" data-tab="commits">Commits<span class="n" id="commit-count"></span></button>
+      </div>
+      <div class="tab-body" id="commit-panel">
+        <div class="paste"><input id="paste" class="mono" placeholder="Paste a commit hash, then press Return" autocomplete="off" spellcheck="false" aria-label="Paste a commit hash, then press Return"><div class="paste-msg" id="paste-msg" role="status" hidden></div></div>
+        <div class="commits scroll" id="commits"></div>
+      </div>
+      <div class="wt-sum" id="working-panel" hidden></div>
+    </div>
+  </section>
+  <section class="main" id="main">
+    <div class="summary" id="summary" hidden><h2 id="subject"></h2><div class="meta" id="commit-meta"></div><div class="banner" id="banner" hidden></div></div>
+    <div class="file-head" id="file-head" hidden></div>
+    <div class="diff-wrap" id="diff"></div>
+  </section>
+</div>
+<template id="icons">
+  <svg class="i" data-icon="folder" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 4.25a1 1 0 0 1 1-1h3.4l1.5 1.6h5.6a1 1 0 0 1 1 1v6.9a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z"/></svg>
+  <svg class="i check" data-icon="check" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg>
+  <svg class="i" data-icon="expand" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 5.5 8 2.5l3 3M5 10.5l3 3 3-3"/></svg>
+  <svg class="i" data-icon="file" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.75h5l3.25 3.25v9.25H4z"/><path d="M9 1.75V5h3.25"/></svg>
+  <svg class="i" data-icon="image" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><circle cx="6" cy="6.5" r="1.2"/><path d="m2.5 12 3.5-3.5 2.5 2.5 2-2 3 3"/></svg>
+  <svg class="i" data-icon="alert" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75v3.75M8 10.9v.1"/></svg>
+  <svg class="i" data-icon="sidebar" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.75"/><path d="M6.25 2.75v10.5"/></svg>
+  <svg class="i" data-icon="merge" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="8" r="1.5"/><path d="M4.5 5v6M4.5 5c0 3 3 3 5.5 3"/></svg>
+  <svg class="i" data-icon="link" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.75 9.25a2.5 2.5 0 0 0 3.5 0l2.25-2.25a2.5 2.5 0 0 0-3.5-3.5l-.75.75"/><path d="M9.25 6.75a2.5 2.5 0 0 0-3.5 0L3.5 9a2.5 2.5 0 0 0 3.5 3.5l.75-.75"/></svg>
+  <svg class="i" data-icon="refresh" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.25 8a5.25 5.25 0 1 1-1.6-3.77"/><path d="M13.4 2.5v3h-3"/></svg>
+  <svg class="glyph" data-icon="mark" viewBox="0 0 20 18" aria-hidden="true"><rect x="1" y="2" width="7" height="2.4" rx="1" class="old"/><rect x="1" y="7.8" width="5" height="2.4" rx="1" class="old"/><rect x="1" y="13.6" width="6" height="2.4" rx="1" class="old"/><rect x="12" y="2" width="7" height="2.4" rx="1" class="new"/><rect x="12" y="7.8" width="7" height="2.4" rx="1" class="new"/><rect x="12" y="13.6" width="4.5" height="2.4" rx="1" class="new"/><rect x="9.6" y="0" width="0.8" height="18" class="rule"/></svg>
+</template>
+<script type="module" src="renderer.js"></script>
+</body>
+</html>
